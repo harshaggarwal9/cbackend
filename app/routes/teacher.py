@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-
 from app.db.session import get_db
 from app.models.models import users, teachers
 from app.schema import TeacherCreate, TeacherUpdate, TeacherRead
@@ -13,9 +12,6 @@ def create_teacher(user_id: int, payload: TeacherCreate, db: Session = Depends(g
     user = db.query(users).filter(users.id == user_id).first()
     if not user:
         raise HTTPException(404, "User not found")
-
-    if user.role != "teacher":
-        raise HTTPException(400, "This user is not a teacher")
 
     existing = db.query(teachers).filter(teachers.user_id == user_id).first()
     if existing:
@@ -83,14 +79,9 @@ def update_teacher(teacher_id: int, payload: TeacherUpdate, db: Session = Depend
     if not teacher:
         raise HTTPException(404, "Teacher not found")
 
-    if payload.subjects is not None:
-        teacher.subjects = ",".join(payload.subjects)
-
-    if payload.experience is not None:
-        teacher.experience = payload.experience
-
-    if payload.qualifications is not None:
-        teacher.qualifications = payload.qualifications
+    teacher.subjects = ",".join(payload.subjects)
+    teacher.experience = payload.experience
+    teacher.qualifications = payload.qualifications
 
     db.commit()
     db.refresh(teacher)

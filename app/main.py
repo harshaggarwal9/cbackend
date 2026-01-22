@@ -1,18 +1,12 @@
-from fastapi import FastAPI, Depends
-from app.db.session import get_db, engine
+from fastapi import FastAPI
+from app.db.session import engine
 from app.db.base import Base
 from app.config.firebase import init_firebase
-from app.routes import auth
-from app.routes import batch
-from app.routes import allotment, content, notification, comment,student, teacher,timetable 
-
+from app.routes import auth, batch, allotment, content, notification, comment, student, teacher, timetable 
 
 async def lifespan(app: FastAPI):
-
-    Base.metadata.create_all(bind=engine)
-    
+    Base.metadata.create_all(bind=engine)    
     init_firebase()
-
     yield
 
 app = FastAPI(lifespan=lifespan)

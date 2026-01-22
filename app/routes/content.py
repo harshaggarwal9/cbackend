@@ -3,33 +3,22 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.models import contents, comments,users, enrollments, batches  
+from app.models.models import (
+    contents,
+    comments,
+    enrollments,
+    batches,
+    users,
+    RoleEnum,
+    ContentTypeEnum,
+)
 from app.schema import ContentRead, CommentCreate, CommentRead
+from app.dependencies.role import require_roles
 from app.core.authen import get_current_user
-from app.models.models import ContentTypeEnum
 
+router = APIRouter(prefix="/contents", tags=["Contents"])
 
-router = APIRouter(prefix="/contents", tags=["contents"])
-
-def _user_is_enrolled(db: Session, user_id: int, batch_id: int) -> bool:
-    
-    if batch_id is None:
-        return True
-    e = db.query(enrollments).filter(
-        enrollments.batch_id == batch_id,
-        enrollments.student_id == user_id,
-        enrollments.is_active == True
-    ).first()
-    return bool(e)
-
-def _is_teacher(user):
-    return getattr(user, "role", "") == "teacher"
-
-def _is_admin(user):
-    return getattr(user, "role", "") == "admin"
-
-
-@router.post("/", response_model=ContentRead)
+@router.post("/", response_model=ContentRead, status_code=status.HTTP_201_CREATED)
 def upload_content(
     title: str,
     storage_url: str,
@@ -37,104 +26,113 @@ def upload_content(
     content_type: str = "video",
     batch_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user)
+    current_user: users = Depends(require_roles(RoleEnum.ADMIN, RoleEnum.TEACHER)),
 ):
-    
-    if not (_is_teacher(current_user) or _is_admin(current_user)):
-        raise HTTPException(status_code=403, detail="Not allowed to upload content")
-
     if batch_id is not None:
         batch = db.query(batches).filter(batches.id == batch_id).first()
         if not batch:
             raise HTTPException(status_code=404, detail="Batch not found")
 
-    new_content = contents(
-    title=title,
-    description=description,
-    storage_url=storage_url,
-    content_type=ContentTypeEnum(content_type),
-    uploader_id=current_user.id,
-    batch_id=batch_id,
-)
+    content = contents(
+        title=title,
+        description=description,
+        storage_url=storage_url,
+        content_type=ContentTypeEnum(content_type),
+        uploader_id=current_user.id,
+        batch_id=batch_id,
+    )
 
-    db.add(new_content)
+    db.add(content)
     db.commit()
-    db.refresh(new_content)
+    db.refresh(content)
 
-    return ContentRead.model_validate(new_content)
+    return content
+
 
 @router.get("/", response_model=List[ContentRead])
-def list_contents(batch_id: Optional[int] = None, only_public: Optional[bool] = False, db: Session = Depends(get_db)):
-
+def list_contents(batch_id: Optional[int] = None,only_public: bool = False,db: Session = Depends(get_db)):
     q = db.query(contents)
+
     if batch_id is not None:
         q = q.filter(contents.batch_id == batch_id)
+
     if only_public:
         q = q.filter(contents.is_public == True)
-    rows = q.order_by(contents.created_at.desc()).all()
-    return [ContentRead.model_validate(r) for r in rows]
+
+    return q.order_by(contents.created_at.desc()).all()
 
 
 @router.get("/{content_id}", response_model=ContentRead)
-def get_content(content_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
-
-    row = db.query(contents).filter(contents.id == content_id).first()
-    if not row:
+def get_content(content_id: int,db: Session = Depends(get_db),current_user: users = Depends(get_current_user),):
+    content = db.query(contents).filter(contents.id == content_id).first()
+    if not content:
         raise HTTPException(status_code=404, detail="Content not found")
 
-    if row.batch_id is not None:
-        
-        if current_user is None:
-            raise HTTPException(status_code=403, detail="Authentication required to view this content")
-        if not _user_is_enrolled(db, current_user.id, row.batch_id) and not getattr(current_user, "is_admin", False):
+    if content.batch_id is not None:
+        enrolled = db.query(enrollments).filter(enrollments.batch_id == content.batch_id,enrollments.student_id == current_user.id,enrollments.is_active == True,).first()
+
+        if not enrolled and current_user.role != RoleEnum.ADMIN:
             raise HTTPException(status_code=403, detail="Not enrolled in this batch")
 
-    return ContentRead.model_validate(row)
+    return content
 
 
 @router.get("/{content_id}/comments", response_model=List[CommentRead])
 def list_comments(content_id: int, db: Session = Depends(get_db)):
-
-    row = db.query(contents).filter(contents.id == content_id).first()
-    if not row:
+    content = db.query(contents).filter(contents.id == content_id).first()
+    if not content:
         raise HTTPException(status_code=404, detail="Content not found")
 
-    crows = db.query(comments).filter(comments.content_id == content_id, comments.is_public == True).order_by(comments.created_at.asc()).all()
-    return [CommentRead.model_validate(c) for c in crows]
+    return   db.query(comments).filter(comments.content_id == content_id, comments.is_public == True).order_by(comments.created_at.asc()).all()
 
 
-@router.post("/{content_id}/comments", response_model=CommentRead, status_code=status.HTTP_201_CREATED)
-def create_comment(content_id: int, payload: CommentCreate, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
 
-    row = db.query(contents).filter(contents.id == content_id).first()
-    if not row:
+@router.post("/{content_id}/comments",response_model=CommentRead,status_code=status.HTTP_201_CREATED)
+def create_comment(
+    content_id: int,
+    payload: CommentCreate,
+    db: Session = Depends(get_db),
+    current_user: users = Depends(get_current_user),
+):
+    content = db.query(contents).filter(contents.id == content_id).first()
+    if not content:
         raise HTTPException(status_code=404, detail="Content not found")
 
-    if row.batch_id is not None:
-        if not _user_is_enrolled(db, current_user.id, row.batch_id) and not getattr(current_user, "is_admin", False):
+    if content.batch_id is not None:
+        enrolled = db.query(enrollments).filter(
+            enrollments.batch_id == content.batch_id,
+            enrollments.student_id == current_user.id,
+            enrollments.is_active == True,
+        ).first()
+
+        if not enrolled and current_user.role != RoleEnum.ADMIN:
             raise HTTPException(status_code=403, detail="Not enrolled in this batch")
 
-    comment_row = comments(
+    comment = comments(
         content_id=content_id,
         author_id=current_user.id,
         text=payload.text,
     )
-    db.add(comment_row)
+
+    db.add(comment)
     db.commit()
-    db.refresh(comment_row)
-    return CommentRead.model_validate(comment_row)
+    db.refresh(comment)
+
+    return comment
 
 
 @router.delete("/comments/{comment_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_comment(comment_id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
-
-    c = db.query(comments).filter(comments.id == comment_id).first()
-    if not c:
+def delete_comment(
+    comment_id: int,
+    db: Session = Depends(get_db),
+    current_user: users = Depends(get_current_user),
+):
+    comment = db.query(comments).filter(comments.id == comment_id).first()
+    if not comment:
         raise HTTPException(status_code=404, detail="Comment not found")
 
-    if not (getattr(current_user, "is_admin", False) or c.author_id == current_user.id):
+    if current_user.role != RoleEnum.ADMIN and comment.author_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this comment")
 
-    db.delete(c)
+    db.delete(comment)
     db.commit()
-    return None

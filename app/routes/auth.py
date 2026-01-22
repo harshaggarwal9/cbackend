@@ -2,23 +2,15 @@ from fastapi import APIRouter, Depends, HTTPException, status, Body
 from fastapi.security import HTTPBearer
 from sqlalchemy.orm import Session
 from firebase_admin import auth as firebase_auth
-
 from app.db.session import get_db
 from app.models.models import users, AuthProviderEnum, UserAuthProviders
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
+
 security = HTTPBearer()
 
-
 def verify_firebase_token(token: str):
-    try:
-        return firebase_auth.verify_id_token(token)
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired Firebase token",
-        )
-
+    return firebase_auth.verify_id_token(token)
 
 @router.post("/register")
 def register_user(data: dict = Body(...),credentials=Depends(security),db: Session = Depends(get_db)):
@@ -33,6 +25,7 @@ def register_user(data: dict = Body(...),credentials=Depends(security),db: Sessi
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,detail="Email not found in Firebase token",)
 
     raw_provider = decoded.get("firebase", {}).get("sign_in_provider", "password")
+    
     if raw_provider == "google.com":
         provider_enum = AuthProviderEnum.google
     else:
@@ -41,7 +34,7 @@ def register_user(data: dict = Body(...),credentials=Depends(security),db: Sessi
     full_name = None
 
     if provider_enum == AuthProviderEnum.password:
-        # For email/password, expect full_name or (first+last) from body
+    
         full_name = data.get("full_name")
 
         if not full_name:
@@ -51,17 +44,10 @@ def register_user(data: dict = Body(...),credentials=Depends(security),db: Sessi
                 full_name = f"{first_name} {last_name}"
 
         if not full_name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="full_name or (first_name + last_name) is required for email/password signup",
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,detail="full_name is required for email/password signup")
 
     else:
         full_name = decoded.get("name") or decoded.get("display_name")
-
-        # optional: allow override from body if provided
-        if data.get("full_name"):
-            full_name = data["full_name"]
 
     user = db.query(users).filter(users.firebase_uid == firebase_uid).first()
 
@@ -96,15 +82,8 @@ def register_user(data: dict = Body(...),credentials=Depends(security),db: Sessi
             db.refresh(user)
 
     # ---- Ensure provider entry exists ----
-    provider_row = (
-        db.query(UserAuthProviders)
-        .filter(
-            UserAuthProviders.user_id == user.id,
-            UserAuthProviders.provider == provider_enum
-        )
-        .first()
-    )
-
+    provider_row = db.query(UserAuthProviders).filter(UserAuthProviders.user_id == user.id,UserAuthProviders.provider == provider_enum).first()
+    
     if not provider_row:
         provider_row = UserAuthProviders(
             user_id=user.id,
@@ -122,4 +101,58 @@ def register_user(data: dict = Body(...),credentials=Depends(security),db: Sessi
             "full_name": user.full_name,
             "provider": provider_enum.value,
         },
+    }
+
+
+@router.post("/login")
+def login_user(credentials=Depends(security),db: Session = Depends(get_db)):
+
+    token = credentials.credentials
+    try:
+        decoded = firebase_auth.verify_id_token(token)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,detail="Invalid or expired Firebase token")
+
+    firebase_uid = decoded["uid"]
+    email = decoded.get("email")
+    email_verified = decoded.get("email_verified", False)
+
+    if not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,detail="Email not found in Firebase token")
+
+    raw_provider = decoded.get("firebase", {}).get("sign_in_provider", "password")
+    provider_enum = (
+        AuthProviderEnum.google
+        if raw_provider == "google.com"
+        else AuthProviderEnum.password
+    )
+
+    user = db.query(users).filter(users.firebase_uid == firebase_uid).first()
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="User not registered. Please sign up first.")
+
+    updated = False
+
+    if email_verified and not user.is_verified:
+        user.is_verified = True
+        updated = True
+
+    if user.auth_provider != provider_enum:
+        user.auth_provider = provider_enum
+        updated = True
+
+    if updated:
+        db.commit()
+        db.refresh(user)
+
+    return {
+        "message": "Login successful",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role.value,
+            "provider": user.auth_provider.value,
+        }
     }

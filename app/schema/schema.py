@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict, constr
+from pydantic import BaseModel, ConfigDict
 from ..models.models import RoleEnum, ContentTypeEnum, PaymentStatusEnum
 
 
@@ -10,13 +10,11 @@ class User(BaseModel):
     full_name: Optional[str] = None
     is_active: bool = True
     is_verified: bool = False
-    role: RoleEnum = RoleEnum.student
+    role: RoleEnum = RoleEnum.STUDENT
     created_at: datetime
     updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
-
-
 
 class Batch(BaseModel):
     id: int
@@ -86,13 +84,6 @@ class TeacherCreate(BaseModel):
     experience: Optional[int] = None
     qualifications: Optional[str] = None
 
-
-class TeacherUpdate(BaseModel):
-    subjects: Optional[List[str]] = None
-    experience: Optional[int] = None
-    qualifications: Optional[str] = None
-
-
 class TeacherRead(BaseModel):
     id: int
     user_id: int
@@ -103,14 +94,15 @@ class TeacherRead(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class TeacherUpdate(BaseModel):
+    subjects: Optional[List[str]] = None
+    experience: Optional[int] = None
+    qualifications: Optional[str] = None
+
 
 class EnrollmentCreate(BaseModel):
     batch_id: int
     role_in_batch: Optional[str] = "student"
-
-class EnrollmentUpdate(BaseModel):
-    is_active: Optional[bool] = None
-    role_in_batch: Optional[str] = None
 
 class EnrollmentRead(BaseModel):
     id: int
@@ -121,6 +113,11 @@ class EnrollmentRead(BaseModel):
     role_in_batch: str
 
     model_config = ConfigDict(from_attributes=True)
+
+class EnrollmentUpdate(BaseModel):
+    is_active: Optional[bool] = None
+    role_in_batch: Optional[str] = None
+
 
 class StudentRead(BaseModel):
     id: int
@@ -239,3 +236,26 @@ class CommentRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)    
+
+
+class BatchCreate(BaseModel):
+    pass
+
+
+class BatchRead(BaseModel):
+    id: int
+    created_at: Optional[datetime]
+
+    class Config:
+        orm_mode = True
+
+class BatchUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    coordinator_id: Optional[int] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    is_active: Optional[bool] = None
+ 
+
+
